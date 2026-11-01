@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Smart Hydroponic Greenhouse – Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=Source+Sans+3:wght@400;600;700&display=swap">
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+:root{--bg:#F1F5F0;--card:#fff;--ink:#14231A;--muted:#55665B;--line:#D3DED5;--accent:#1F4D35;--on:#2F7D4F;--off:#8A958C;--warn:#C77700;--bad:#C62828}
+@media (prefers-color-scheme:dark){:root{--bg:#111814;--card:#1A231E;--ink:#E4ECE6;--muted:#9AAAA0;--line:#2E3A33;--accent:#5DBB84;--on:#3FA066;--off:#56625A}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Source Sans 3",system-ui,sans-serif;
+  padding:max(14px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 28px max(16px,env(safe-area-inset-left))}
+.wrap{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+header{display:flex;flex-direction:column;gap:2px}
+h1{font-family:Archivo,sans-serif;font-weight:800;font-size:24px;margin:0;color:var(--accent);line-height:1.1}
+.sub{color:var(--muted);font-size:14px}
+.status{display:inline-flex;align-items:center;gap:7px;font-weight:700;font-size:14px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--off)}
+.dot.live{background:var(--on);box-shadow:0 0 0 0 rgba(47,125,79,.6);animation:p 1.6s infinite}
+@keyframes p{70%{box-shadow:0 0 0 8px rgba(47,125,79,0)}100%{box-shadow:0 0 0 0 rgba(47,125,79,0)}}
+.cam{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:4/3}
+.cam img{width:100%;height:100%;object-fit:cover;display:block}
+.cam .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:15px;text-align:center;padding:20px}
+.cam .ts{position:absolute;left:10px;bottom:8px;background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding:3px 8px;border-radius:6px}
+.reads{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rd{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.rd span{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.rd b{font-family:Archivo,sans-serif;font-size:30px;font-variant-numeric:tabular-nums}
+.ctl{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{font:700 17px "Source Sans 3",sans-serif;border:0;border-radius:14px;padding:18px 12px;color:#fff;background:var(--off);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:84px}
+button small{font-weight:600;font-size:13px;opacity:.9}
+button.on{background:var(--on)}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+footer{color:var(--muted);font-size:12.5px;text-align:center;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Smart Hydroponic Greenhouse</h1>
+    <div class="sub">Applied Technology Schools · Fujairah · AI-controlled · Solar-powered</div>
+    <div class="status"><span class="dot" id="dot"></span><span id="st">Connecting…</span></div>
+  </header>
+
+  <div class="cam">
+    <img id="cam" alt="Live photo of the greenhouse plants" hidden>
+    <div class="msg" id="camMsg">Waiting for the greenhouse camera…</div>
+    <div class="ts" id="camTs" hidden></div>
+  </div>
+
+  <div class="reads">
+    <div class="rd"><span>Temperature</span><b id="t">--</b></div>
+    <div class="rd"><span>Humidity</span><b id="h">--</b></div>
+  </div>
+
+  <div class="ctl">
+    <button id="fan" data-k="fan" disabled>Fan<small>--</small></button>
+    <button id="pump" data-k="pump" disabled>Water pump<small>--</small></button>
+    <button id="led" data-k="led" disabled>Grow light<small>--</small></button>
+    <button id="win" data-k="win" disabled>Window<small>--</small></button>
+  </div>
+
+  <footer>Photo updates every 2 seconds. Tap a button to switch a device in the real greenhouse.<br>Grade 10 project · Applied Technology Schools</footer>
+</div>
+
+<script>
+(function(){
+  var BASE = "ats-fuj/smarthydro-7k3q9";
+  var state = {}, lastSeen = 0, lastPhoto = 0, url = null;
+  var $ = function(id){ return document.getElementById(id); };
+  var labels = {fan:["OFF","ON"], pump:["OFF","ON"], led:["OFF","ON"], win:["CLOSED","OPEN"]};
+
+  function render(){
+    ["fan","pump","led","win"].forEach(function(k){
+      var b = $(k), v = state[k] ? 1 : 0;
+      b.classList.toggle("on", !!v);
+      b.querySelector("small").textContent = state[k] === undefined ? "--" : labels[k][v];
+    });
+    $("t").textContent = state.t == null ? "--" : state.t.toFixed(1) + "°C";
+    $("h").textContent = state.h == null ? "--" : Math.round(state.h) + "%";
+  }
+  function tick(){
+    var live = Date.now() - lastSeen < 15000;
+    $("dot").classList.toggle("live", live);
+    $("st").textContent = live ? "Greenhouse online" : (lastSeen ? "Greenhouse offline – showing last data" : "Connecting…");
+    document.querySelectorAll("button").forEach(function(b){ b.disabled = !live; });
+    if (lastPhoto) { var s = Math.round((Date.now() - lastPhoto) / 1000); $("camTs").textContent = s < 3 ? "LIVE" : s + " s ago"; }
+  }
+  setInterval(tick, 1000);
+
+  if (!window.mqtt) { $("st").textContent = "Could not load – check your internet"; return; }
+  var client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt", {
+    clientId: "web-" + Math.random().toString(16).slice(2, 10), clean: true, reconnectPeriod: 3000, connectTimeout: 10000
+  });
+  client.on("connect", function(){ client.subscribe([BASE + "/status", BASE + "/cam"]); });
+  client.on("reconnect", function(){ if (!lastSeen) $("st").textContent = "Connecting…"; });
+  client.on("message", function(topic, payload){
+    if (topic === BASE + "/status") {
+      try { state = JSON.parse(new TextDecoder().decode(payload)); } catch(e) { return; }
+      lastSeen = Date.now(); render(); tick();
+    } else if (topic === BASE + "/cam") {
+      var blob = new Blob([payload], {type: "image/jpeg"});
+      var u = URL.createObjectURL(blob);
+      var img = $("cam");
+      img.onload = function(){ if (url) URL.revokeObjectURL(url); url = u; };
+      img.src = u; img.hidden = false; $("camMsg").hidden = true; $("camTs").hidden = false;
+      lastPhoto = Date.now(); tick();
+    }
+  });
+  document.querySelectorAll("button").forEach(function(b){
+    b.addEventListener("click", function(){
+      var k = b.dataset.k, next = state[k] ? 0 : 1;
+      client.publish(BASE + "/cmd", k + ":" + next);
+      b.querySelector("small").textContent = "…";
+    });
+  });
+})();
+</script>
+</body>
+</html>
